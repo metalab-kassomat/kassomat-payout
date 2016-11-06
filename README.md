@@ -20,4 +20,4 @@ A prebuilt [Doxygen HTML help][payout-api] can be found in docs/doxygen.
 [itl-ssp]: http://innovative-technology.com/product-files/ssp-manuals/smart-payout-ssp-manual.pdf
 [itl-hw-hopper]: http://innovative-technology.com/products/products-main/210-smart-hopper
 [itl-hw-validator]: http://innovative-technology.com/products/products-main/90-nv200
-[payout-api]: https://htmlpreview.github.io/?https://github.com/sixtyeight/Payout/blob/master/docs/doxygen/index.html
+[payout-api]: https://metalab-kassomat.github.io/kassomat-payout/doxygen/index.html
