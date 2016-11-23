@@ -72,6 +72,8 @@ struct m_device {
 	int id;
 	/** \brief Human readable name of the device */
 	char *name;
+	/** \brief Indicates if the device is available */
+	int sspDeviceAvailable;
 	/** \brief Preshared secret key */
 	unsigned long long key;
 	/** \brief State of the channel inhibits */
@@ -92,7 +94,7 @@ struct m_metacash {
 	/** \brief If !=0 then we should quit, checked via libevent callback */
 	int quit;
 	/** \brief If !=0 then we have actual hardware available */
-	int deviceAvailable;
+	int sspAvailable;
 	/** \brief The name of the device we should use to connect to the ITL hardware */
 	char *serialDevice;
 	/** \brief Should the hardware accept coins at all (default off for now) */
@@ -264,13 +266,20 @@ redisAsyncContext* connectRedis(struct m_metacash *metacash) {
  */
 void cbOnPollEvent(int fd, short event, void *privdata) {
 	struct m_metacash *metacash = privdata;
-	if (metacash->deviceAvailable == 0) {
-		// return immediately if we have no actual hardware to poll
+	if (metacash->sspAvailable == 0) {
+		// return immediately if we can't communicate with the hardware
 		return;
 	}
 
-	mcSspPollDevice(&metacash->hopper, metacash);
-	mcSspPollDevice(&metacash->validator, metacash);
+	// don't poll the hopper for events if it is unavailable
+	if(metacash->hopper.sspDeviceAvailable) {
+		mcSspPollDevice(&metacash->hopper, metacash);
+	}
+
+	// don't poll the validator for events if it is unavailable
+	if(metacash->validator.sspDeviceAvailable) {
+		mcSspPollDevice(&metacash->validator, metacash);
+	}
 }
 
 /**
@@ -1135,7 +1144,7 @@ void cbOnRequestMessage(redisAsyncContext *c, void *r, void *privdata) {
 			} else {
 				// commands in here need the actual hardware
 
-				if(! m->deviceAvailable) {
+				if(! m->sspAvailable) {
 					// TODO: an unknown command without the actual hardware will also receive this response :-/
 					syslog(LOG_WARNING, "rejecting cmd='%s' from msgId='%s', hardware unavailable!\n", cmd.command, cmd.correlId);
 					replyWith(cmd.responseTopic, "{\"correlId\":\"%s\",\"error\":\"hardware unavailable\"}", cmd.correlId);
@@ -1271,7 +1280,7 @@ int main(int argc, char *argv[]) {
 	signal(SIGINT, signalHandler);
 
 	struct m_metacash metacash;
-	metacash.deviceAvailable = 0;
+	metacash.sspAvailable = 0; // defaults to no initially
 	metacash.quit = 0;
 	metacash.logSyslogStderr = 0; // default, override using -e
 	metacash.acceptCoins = 0; // default, override using -c
@@ -1280,12 +1289,14 @@ int main(int argc, char *argv[]) {
 	metacash.redisHost = "127.0.0.1";	// default, override with -h argument
 	metacash.redisPort = 6379;			// default, override with -p argument
 
-	metacash.hopper.id = 0x10; // 0X10 -> Smart Hopper ("Münzer")
+	metacash.hopper.id = 0x10; // 0x10 -> Smart Hopper ("Münzer")
+	metacash.hopper.sspDeviceAvailable = 0; // defaults to no initially
 	metacash.hopper.name = "Mr. Coin";
 	metacash.hopper.key = DEFAULT_KEY;
 	metacash.hopper.eventHandlerFn = hopperEventHandler;
 
 	metacash.validator.id = 0x00; // 0x00 -> Smart Payout NV200 ("Scheiner")
+	metacash.validator.sspDeviceAvailable = 0; // defaults to no initially
 	metacash.validator.name = "Ms. Note";
 	metacash.validator.key = DEFAULT_KEY;
 	metacash.validator.eventHandlerFn = validatorEventHandler;
@@ -1308,9 +1319,9 @@ int main(int argc, char *argv[]) {
 
 	// open the serial device
 	if (mcSspOpenSerialDevice(&metacash) == 0) {
-		metacash.deviceAvailable = 1;
+		metacash.sspAvailable = 1;
 	} else {
-		syslog(LOG_ALERT, "cash hardware unavailable");
+		syslog(LOG_ALERT, "ssp communication unavailable");
 	}
 
 	// setup the ssp commands, configure and initialize the hardware
@@ -1326,7 +1337,7 @@ int main(int argc, char *argv[]) {
 
 	syslog(LOG_NOTICE, "shutting down");
 
-	if (metacash.deviceAvailable) {
+	if (metacash.sspAvailable) {
 		mcSspCloseSerialDevice(&metacash);
 	}
 
@@ -1712,7 +1723,11 @@ void setup(struct m_metacash *metacash) {
 	}
 
 	// try to initialize the hardware only if we successfully have opened the device
-	if (metacash->deviceAvailable) {
+	if (metacash->sspAvailable) {
+		if(metacash->validator.sspDeviceAvailable == 0 && metacash->hopper.sspDeviceAvailable == 0) {
+			syslog(LOG_WARNING, "no SSP devices available");
+		}
+
 		// prepare the device structures
 		mcSspSetupCommand(&metacash->validator.sspC, metacash->validator.id);
 		mcSspSetupCommand(&metacash->hopper.sspC, metacash->hopper.id);
@@ -1723,30 +1738,34 @@ void setup(struct m_metacash *metacash) {
 		mcSspInitializeDevice(&metacash->hopper.sspC, metacash->hopper.key,
 				&metacash->hopper);
 
-		{
-			if(metacash->acceptCoins) {
-				syslog(LOG_WARNING, "coins will be accepted");
+		// only try to configure the hopper if it is available
+		if (metacash->hopper.sspDeviceAvailable) {
+			syslog(LOG_INFO, "setup of device '%s' started", metacash->hopper.name);
 
-				// SMART Hopper configuration
-				for (unsigned int i = 0; i < metacash->hopper.sspSetupReq.NumberOfChannels; i++) {
-					ssp6_set_coinmech_inhibits(&metacash->hopper.sspC,
-							metacash->hopper.sspSetupReq.ChannelData[i].value,
-							metacash->hopper.sspSetupReq.ChannelData[i].cc, ENABLED);
-				}
+			enum channel_state desiredChannelState = DISABLED;
+
+			if(metacash->acceptCoins) {
+				desiredChannelState = ENABLED;
+				syslog(LOG_WARNING, "coins will be accepted");
 			} else {
 				syslog(LOG_NOTICE, "coins will not be accepted");
-
-				// SMART Hopper configuration
-				for (unsigned int i = 0; i < metacash->hopper.sspSetupReq.NumberOfChannels; i++) {
-					ssp6_set_coinmech_inhibits(&metacash->hopper.sspC,
-							metacash->hopper.sspSetupReq.ChannelData[i].value,
-							metacash->hopper.sspSetupReq.ChannelData[i].cc, DISABLED);
-				}
 			}
+
+			// SMART Hopper configuration
+			for (unsigned int i = 0; i < metacash->hopper.sspSetupReq.NumberOfChannels; i++) {
+				ssp6_set_coinmech_inhibits(&metacash->hopper.sspC,
+						metacash->hopper.sspSetupReq.ChannelData[i].value,
+						metacash->hopper.sspSetupReq.ChannelData[i].cc, desiredChannelState);
+			}
+
+			syslog(LOG_NOTICE, "setup of device '%s' finished successfully", metacash->hopper.name);
+		} else {
+			syslog(LOG_WARNING, "skipping setup of device '%s' as it is not available", metacash->hopper.name);
 		}
 
-		{
-			// SMART Payout configuration
+		// only try to configure the validator if it is available
+		if (metacash->validator.sspDeviceAvailable) {
+			syslog(LOG_INFO, "setup of device '%s' started", metacash->validator.name);
 
 			// reject notes unfit for storage.
 			// if this is not enabled, notes unfit for storage will be silently redirected
@@ -1788,9 +1807,13 @@ void setup(struct m_metacash *metacash) {
 				syslog(LOG_ERR, "Enable Payout Failed\n");
 				return;
 			}
-		}
 
-		syslog(LOG_INFO, "setup finished successfully\n");
+			syslog(LOG_NOTICE, "setup of device '%s' finished successfully", metacash->validator.name);
+		} else {
+			syslog(LOG_WARNING, "skipping configuration of device '%s' as it is not available", metacash->validator.name);
+		}
+	} else {
+		syslog(LOG_WARNING, "SSP communication unavailable, skipping hardware setup");
 	}
 
 	// setup libevent triggered polling of the hardware (every second more or less)
@@ -1941,6 +1964,7 @@ void mcSspInitializeDevice(SSP_COMMAND *sspC, unsigned long long key,
 		return;
 	}
 
+	device->sspDeviceAvailable = 1;
 	syslog(LOG_NOTICE, "device has been successfully initialized (id=0x%02X, '%s')\n", sspC->SSPAddress, device->name);
 }
 
