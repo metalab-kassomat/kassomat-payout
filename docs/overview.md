@@ -1,7 +1,7 @@
 # Payout Module
 
-> The Payout Module (called Payout afterwards) acts as a thin layer
-> around the rather low-level [SSP protocol][itl-ssp]
+> The Payout Module (called Payout afterwards) acts as a thin JSON API layer
+> around the rather low-level binary based serial [SSP protocol][itl-ssp]
 > from Innovative Technology used for communication with the [SMART Hopper][itl-hw-hopper]
 > and [NV200 Banknote validator][itl-hw-validator] devices.
 
@@ -10,7 +10,7 @@ using a [Publish/Subscribe][mep-pubsub] message exchange pattern and,
 if necessary, a [Request/Response][mep-rr] message exchange pattern. [Redis][redis] is used as the
 message broker. The message payload is a rather simple structured JSON. Payout itself is implemented
 in the C programming language. Some examples can be seen [here](examples.md).
-Take also a look at the [Changeomatic][changeomatic], a proof of concept money changer in Java.
+Take also a look at the [Changeomatic][changeomatic], a money changer in Java.
 
 ### Topics used by Payout
 
@@ -22,11 +22,9 @@ Using the above naming scheme we end up with the following topics
  - ``hopper-request`` *
  - ``hopper-response``
  - ``hopper-event``
- - ``hopper-dead-letter``
  - ``validator-request`` *
  - ``validator-response``
  - ``validator-event``
- - ``validator-dead-letter``
 
 #### The 'request' / 'response' topics
 
@@ -39,14 +37,6 @@ own to this topic without a triggering message in the ``request`` topic. A list 
 Payout is using this topic for publishing events which have been reported by a device. All messages published here will have at least an ``event`` property. Some events may provide additional properties (e.g. the value of an accepted coin or banknote). A detailed list of all supported events with their properties is enclosed.
 As an example, this ``{"event":"credit","amount":1000,"channel":2}`` will be published if a 10 Euro banknote
 has been accepted and the amount (which is provided in cents) can be credited. Or, in this example the hopper has accepted a 2 Euro coin: ``{"event":"coin credit","amount":200,"cc":"EUR"}``.
-
-#### The 'dead-letter' topic
-
-> This is not implemented right now
-
-If Payout is not able to interpret a message (e.g. the ``msgId`` property is missing or otherwise seriously malformed)
-it will publish a copy of that message into this topic. No further processing will be done and no response
-message will be published to the ``response`` topic.
 
 ## Overview of Events, Requests and Responses
 
@@ -322,7 +312,7 @@ message will be published to the ``response`` topic.
 ### udev rule
 ``SUBSYSTEM=="tty" ATTRS{manufacturer}=="Innovative Technology LTD" SYMLINK+="kassomat"``
 
-[changeomatic]: https://github.com/sixtyeight/changeomatic/blob/master/src/main/java/at/metalab/changeomatic/ChangeomaticMain.java 
+[changeomatic]: https://github.com/metalab-kassomat/kassomat-changeomatic
 [redis]: http://redis.io
 [mep-rr]: https://en.wikipedia.org/wiki/Request%E2%80%93response
 [mep-pubsub]: https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern
