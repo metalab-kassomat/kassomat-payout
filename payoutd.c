@@ -156,6 +156,8 @@ void mcSspPollDevice(struct m_device *device, struct m_metacash *metacash);
 #define SSP_CMD_GET_ALL_LEVELS 0x22
 /** \brief Magic Constant for the "SET DENOMINATION LEVEL" command ID as specified in SSP */
 #define SSP_CMD_SET_DENOMINATION_LEVEL 0x34
+/** \brief Magic Constant for the "SET CASHBOX PAYOUT LIMIT" command ID as specified in SSP */
+#define SSP_CMD_SET_CASHBOX_PAYOUT_LIMIT 0x4E
 /** \brief Magic Constant for the "LAST REJECT NOTE" command ID as specified in SSP */
 #define SSP_CMD_LAST_REJECT_NOTE 0x17
 /** \brief Magic Constant for the "CONFIGURE BEZEL" command ID as specified in SSP */
@@ -182,6 +184,7 @@ SSP_RESPONSE_ENUM mc_ssp_last_reject_note(SSP_COMMAND *sspC, unsigned char *reas
 SSP_RESPONSE_ENUM mc_ssp_set_refill_mode(SSP_COMMAND *sspC);
 SSP_RESPONSE_ENUM mc_ssp_get_all_levels(SSP_COMMAND *sspC, char **json);
 SSP_RESPONSE_ENUM mc_ssp_set_denomination_level(SSP_COMMAND *sspC, int amount, int level, const char *cc);
+SSP_RESPONSE_ENUM mc_set_cashbox_payout_limit(SSP_COMMAND *sspC, unsigned int amount, int level, const char *cc);
 SSP_RESPONSE_ENUM mc_ssp_float(SSP_COMMAND *sspC, const int value, const char *cc, const char option);
 SSP_RESPONSE_ENUM mc_ssp_channel_security_data(SSP_COMMAND *sspC);
 SSP_RESPONSE_ENUM mc_ssp_get_firmware_version(SSP_COMMAND *sspC, char *firmwareVersion);
@@ -1724,10 +1727,6 @@ void setup(struct m_metacash *metacash) {
 
 	// try to initialize the hardware only if we successfully have opened the device
 	if (metacash->sspAvailable) {
-		if(metacash->validator.sspDeviceAvailable == 0 && metacash->hopper.sspDeviceAvailable == 0) {
-			syslog(LOG_WARNING, "no SSP devices available");
-		}
-
 		// prepare the device structures
 		mcSspSetupCommand(&metacash->validator.sspC, metacash->validator.id);
 		mcSspSetupCommand(&metacash->hopper.sspC, metacash->hopper.id);
@@ -1756,6 +1755,22 @@ void setup(struct m_metacash *metacash) {
 				ssp6_set_coinmech_inhibits(&metacash->hopper.sspC,
 						metacash->hopper.sspSetupReq.ChannelData[i].value,
 						metacash->hopper.sspSetupReq.ChannelData[i].cc, desiredChannelState);
+
+				/*
+				 * at most 2 coins of every denomination should be kept, all
+				 * excess coins should be dropped into the cashbox if they are encountered
+				 * during a payout. doesn't work on my hopper though the hardware replies with SSP_RESPONSE_OK.
+				 * using firmware SH00036192097000.
+				 */
+
+				/*
+				if(mc_set_cashbox_payout_limit(&metacash->hopper.sspC,
+						2,
+						metacash->hopper.sspSetupReq.ChannelData[i].value,
+						metacash->hopper.sspSetupReq.ChannelData[i].cc) != SSP_RESPONSE_OK) {
+					syslog(LOG_NOTICE, "failed: set cashbox limit");
+				}
+				*/
 			}
 
 			syslog(LOG_NOTICE, "setup of device '%s' finished successfully", metacash->hopper.name);
@@ -2271,6 +2286,44 @@ SSP_RESPONSE_ENUM mc_ssp_set_denomination_level(SSP_COMMAND *sspC, int amount, i
 
 	return resp;
 }
+
+/**
+ * \brief Implements the "SET CASHBOX PAYOUT LIMIT" command from the SSP Protocol.
+ */
+SSP_RESPONSE_ENUM mc_set_cashbox_payout_limit(SSP_COMMAND *sspC, unsigned int limit, int denomination, const char *cc) {
+	sspC->CommandDataLength = 11;
+	sspC->CommandData[0] = SSP_CMD_SET_CASHBOX_PAYOUT_LIMIT;
+
+	int j = 0;
+	sspC->CommandData[++j] = 1; // only one limit can be set at once for now
+
+	int i;
+
+	for (i = 0; i < 2; i++) {
+		sspC->CommandData[++j] = limit >> (i * 8);
+	}
+
+	for (i = 0; i < 4; i++) {
+		sspC->CommandData[++j] = denomination >> (i * 8);
+	}
+
+	for (i = 0; i < 3; i++) {
+		sspC->CommandData[++j] = cc[i];
+	}
+
+	//CHECK FOR TIMEOUT
+	if (send_ssp_command(sspC) == 0) {
+		return SSP_RESPONSE_TIMEOUT;
+	}
+
+	// extract the device response code
+	SSP_RESPONSE_ENUM resp = (SSP_RESPONSE_ENUM) sspC->ResponseData[0];
+
+	// not data to parse
+
+	return resp;
+}
+
 
 /**
  * \brief Implements the "GET ALL LEVELS" command from the SSP Protocol.
