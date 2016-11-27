@@ -184,7 +184,7 @@ SSP_RESPONSE_ENUM mc_ssp_last_reject_note(SSP_COMMAND *sspC, unsigned char *reas
 SSP_RESPONSE_ENUM mc_ssp_set_refill_mode(SSP_COMMAND *sspC);
 SSP_RESPONSE_ENUM mc_ssp_get_all_levels(SSP_COMMAND *sspC, char **json);
 SSP_RESPONSE_ENUM mc_ssp_set_denomination_level(SSP_COMMAND *sspC, int amount, int level, const char *cc);
-SSP_RESPONSE_ENUM mc_set_cashbox_payout_limit(SSP_COMMAND *sspC, unsigned int amount, int level, const char *cc);
+SSP_RESPONSE_ENUM mc_ssp_set_cashbox_payout_limit(SSP_COMMAND *sspC, unsigned int amount, int level, const char *cc);
 SSP_RESPONSE_ENUM mc_ssp_float(SSP_COMMAND *sspC, const int value, const char *cc, const char option);
 SSP_RESPONSE_ENUM mc_ssp_channel_security_data(SSP_COMMAND *sspC);
 SSP_RESPONSE_ENUM mc_ssp_get_firmware_version(SSP_COMMAND *sspC, char *firmwareVersion);
@@ -820,6 +820,28 @@ void handleSetDenominationLevels(struct m_command *cmd) {
 }
 
 /**
+ * \brief Handles the JSON "set-cashbox-payout-limit" command.
+ */
+void handleSetCashboxPayoutLimit(struct m_command *cmd) {
+	json_t *jLevel = json_object_get(cmd->jsonMessage, "level");
+	if(! json_is_integer(jLevel)) {
+		replyWithPropertyError(cmd, "level");
+		return;
+	}
+
+	json_t *jAmount = json_object_get(cmd->jsonMessage, "amount");
+	if(! json_is_integer(jAmount)) {
+		replyWithPropertyError(cmd, "amount");
+		return;
+	}
+
+	int level = json_integer_value(jLevel);
+	int amount = json_integer_value(jAmount);
+
+	replyWithSspResponse(cmd, mc_ssp_set_cashbox_payout_limit(&cmd->device->sspC, level, amount, CURRENCY));
+}
+
+/**
  * \brief Handles the JSON "get-all-levels" command.
  */
 void handleGetAllLevels(struct m_command *cmd) {
@@ -1160,6 +1182,8 @@ void cbOnRequestMessage(redisAsyncContext *c, void *r, void *privdata) {
 						handleSmartEmpty(&cmd);
 					} else if (isCommand(&cmd, "cashbox-payout-operation-data")) {
 						handleCashboxPayoutOperationData(&cmd);
+					} else if (isCommand(&cmd, "set-cashbox-payout-limit")) {
+						handleSetCashboxPayoutLimit(&cmd);
 					} else if (isCommand(&cmd, "enable")) {
 						handleEnable(&cmd);
 					} else if (isCommand(&cmd, "disable")) {
@@ -1755,22 +1779,6 @@ void setup(struct m_metacash *metacash) {
 				ssp6_set_coinmech_inhibits(&metacash->hopper.sspC,
 						metacash->hopper.sspSetupReq.ChannelData[i].value,
 						metacash->hopper.sspSetupReq.ChannelData[i].cc, desiredChannelState);
-
-				/*
-				 * at most 2 coins of every denomination should be kept, all
-				 * excess coins should be dropped into the cashbox if they are encountered
-				 * during a payout. doesn't work on my hopper though the hardware replies with SSP_RESPONSE_OK.
-				 * using firmware SH00036192097000.
-				 */
-
-				/*
-				if(mc_set_cashbox_payout_limit(&metacash->hopper.sspC,
-						2,
-						metacash->hopper.sspSetupReq.ChannelData[i].value,
-						metacash->hopper.sspSetupReq.ChannelData[i].cc) != SSP_RESPONSE_OK) {
-					syslog(LOG_NOTICE, "failed: set cashbox limit");
-				}
-				*/
 			}
 
 			syslog(LOG_NOTICE, "setup of device '%s' finished successfully", metacash->hopper.name);
@@ -2290,7 +2298,7 @@ SSP_RESPONSE_ENUM mc_ssp_set_denomination_level(SSP_COMMAND *sspC, int amount, i
 /**
  * \brief Implements the "SET CASHBOX PAYOUT LIMIT" command from the SSP Protocol.
  */
-SSP_RESPONSE_ENUM mc_set_cashbox_payout_limit(SSP_COMMAND *sspC, unsigned int limit, int denomination, const char *cc) {
+SSP_RESPONSE_ENUM mc_ssp_set_cashbox_payout_limit(SSP_COMMAND *sspC, unsigned int limit, int denomination, const char *cc) {
 	sspC->CommandDataLength = 11;
 	sspC->CommandData[0] = SSP_CMD_SET_CASHBOX_PAYOUT_LIMIT;
 
