@@ -471,6 +471,33 @@ int replyWithSspResponse(struct m_command *cmd, SSP_RESPONSE_ENUM response) {
 }
 
 /**
+ * \brief Helper function to return 1 if the amount can be payed out in coins and 0 if not OR an error occurred
+ */
+int noteChangeable(struct m_command *cmd, int noteValueInCents) {
+	SSP_RESPONSE_ENUM resp = ssp6_payout(&cmd->device->sspC, noteValueInCents, "EUR", SSP6_OPTION_BYTE_TEST);
+
+	if (resp == SSP_RESPONSE_COMMAND_NOT_PROCESSED) {
+		return 0; // no, either no suitable coins available OR an error occurred
+	} else {
+		return 1; // yes we can
+	}
+}
+
+/**
+ * \brief Handles the JSON "z-test-all-coin-changes" command.
+ */
+void handleZTestAllCoinChanges(struct m_command *cmd) {
+	int note5ok = noteChangeable(cmd, 500);
+	int note10ok = noteChangeable(cmd, 1000);
+	int note20ok = noteChangeable(cmd, 2000);
+	int note50ok = noteChangeable(cmd, 5000);
+
+	replyWith(cmd->responseTopic,
+			"{\"correlId\":\"%s\",\"note5\":%d,\"note10\":%d,\"note20\":%d,\"note50\":%d}",
+			cmd->correlId, note5ok, note10ok, note20ok, note50ok);
+}
+
+/**
  * \brief Handles the JSON "quit" command.
  */
 void handleQuit(struct m_command *cmd) {
@@ -1210,6 +1237,8 @@ void cbOnRequestMessage(redisAsyncContext *c, void *r, void *privdata) {
 						handleSetDenominationLevels(&cmd);
 					} else if (isCommand(&cmd, "last-reject-note")) {
 						handleLastRejectNote(&cmd);
+					} else if (isCommand(&cmd, "z-test-all-coin-changes")) {
+						handleZTestAllCoinChanges(&cmd);
 					} else {
 						syslog(LOG_WARNING, "unable to process message: no handler for cmd='%s' found", cmd.command);
 						replyWith(cmd.responseTopic, "{\"correlId\":\"%s\",\"error\":\"unknown command\",\"cmd\":\"%s\"}",
