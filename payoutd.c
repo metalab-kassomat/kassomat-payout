@@ -110,9 +110,9 @@ struct m_metacash {
 	/** \brief base struct for libevent */
 	struct event_base *eventBase;
 	/** \brief event struct for the periodic polling of the devices */
-	struct event evPoll;
+	struct event *evPoll;
 	/** \brief event struct for the periodic check for quitting */
-	struct event evCheckQuit;
+	struct event *evCheckQuit;
 
 	/** \brief struct for the smart-hopper device */
 	struct m_device hopper;
@@ -1744,9 +1744,8 @@ void setup(struct m_metacash *metacash) {
 		interval.tv_sec = 0;
 		interval.tv_usec = 500000;
 
-		event_set(&metacash->evCheckQuit, 0, EV_PERSIST, cbOnCheckQuitEvent, metacash); // provide metacash in privdata
-		event_base_set(metacash->eventBase, &metacash->evCheckQuit);
-		evtimer_add(&metacash->evCheckQuit, &interval);
+		metacash->evCheckQuit = event_new(metacash->eventBase, 0, EV_PERSIST, cbOnCheckQuitEvent, metacash); // provide metacash in privdata
+		evtimer_add(metacash->evCheckQuit, &interval);
 	}
 
 	// try to initialize the hardware only if we successfully have opened the device
@@ -1845,9 +1844,8 @@ void setup(struct m_metacash *metacash) {
 		interval.tv_sec = 1;
 		interval.tv_usec = 0;
 
-		event_set(&metacash->evPoll, 0, EV_PERSIST, cbOnPollEvent, metacash); // provide metacash in privdata
-		event_base_set(metacash->eventBase, &metacash->evPoll);
-		evtimer_add(&metacash->evPoll, &interval);
+		metacash->evPoll = event_new(metacash->eventBase, 0, EV_PERSIST, cbOnPollEvent, metacash); // provide metacash in privdata
+		evtimer_add(metacash->evPoll, &interval);
 	}
 }
 
